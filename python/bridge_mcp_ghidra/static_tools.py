@@ -674,3 +674,219 @@ def _auto_connect():
     except Exception:
         if not instances:
             logger.info("No Ghidra instances found. Tools will be registered on connect_instance().")
+
+
+# ==========================================================================
+# File Upload Tool - Rejected in favor of direct HTTP endpoint
+# ==========================================================================
+
+@mcp.tool()
+async def upload_file(file_data: str, ctx: Context | None = None) -> str:
+    """
+    File uploads are NOT supported via this MCP tool.
+    
+    USE THE DIRECT HTTP ENDPOINT INSTEAD!
+    
+    Upload files directly using HTTP POST requests with multipart/form-data.
+    This is faster, supports larger files, and bypasses MCP protocol overhead.
+    
+    Direct Upload Endpoint Configuration:
+    - Default URL: http://localhost:8090/upload
+    - If running on a different host or port, check your environment variables:
+      - GHIDRA_MCP_HOST (default: 0.0.0.0 or your bind address)
+      - GHIDRA_MCP_UPLOAD_PORT (default: 8090)
+    
+    Quick Start Examples:
+    
+    1. Simple cURL upload:
+       curl -X POST \\
+         -F "file=@your_binary.so" \\
+         http://$UPLOAD_HOST:$UPLOAD_PORT/upload
+    
+    2. With custom filename:
+       curl -X POST \\
+         -F "file=@firmware.bin" \\
+         -F "filename=my_firmware_v1.bin" \\
+         http://$UPLOAD_HOST:$UPLOAD_PORT/upload
+    
+    3. Capture response for Ghidra integration:
+       RESPONSE=$(curl -s -X POST \\
+         -F "file=@target.so" \\
+         http://$UPLOAD_HOST:$UPLOAD_PORT/upload)
+       
+       FILE_PATH=$(echo "$RESPONSE" | jq -r '.full_path')
+       
+       # Then use with import_file()
+       import_file(file_path="$FILE_PATH", language="ELF:LE:32:i386")
+    
+    4. Python requests example:
+       import requests
+       
+       with open("binary.so", "rb") as f:
+           response = requests.post(
+               "http://$UPLOAD_HOST:$UPLOAD_PORT/upload",
+               files={"file": f}
+           )
+           
+       result = response.json()
+       print(f"Uploaded: {{result['full_path']}}")
+    
+    Available Endpoints:
+    - POST /upload - Upload a file (multipart/form-data)
+    - GET /files - List all uploaded files
+    - GET /files/{{filename}} - Get file information
+    - DELETE /files/{{filename}} - Delete a file
+    
+    Best Practices:
+    - Files >10MB should ALWAYS use direct upload (faster, no base64 encoding)
+    - Use multipart/form-data for batch operations
+    - Store the returned 'full_path' for use with other Ghidra tools
+    
+    Security Notes:
+    - Only alphanumeric characters, underscore (_), dash (-), dot (.), space allowed in filenames
+    - Path traversal attempts are blocked
+    - Files stored in directory configured by GHIDRA_MCP_FILE_ROOT
+    
+    For complete documentation, see: docs/FILE_UPLOAD_GUIDE.md
+    
+    Parameters:
+        file_data: Ignored - this tool does not accept file uploads
+        ctx: Context object
+        
+    Returns:
+        String containing usage guide and direct upload endpoint information
+    """
+    import json
+    
+    # Determine the correct host and port for remote access
+    UPLOAD_HOST = os.getenv("GHIDRA_MCP_HOST", "0.0.0.0")
+    UPLOAD_PORT = int(os.getenv("GHIDRA_MCP_UPLOAD_PORT", "8090"))
+    
+    # If bound to 0.0.0.0, default to localhost for local testing convenience
+    display_host = "localhost" if UPLOAD_HOST == "0.0.0.0" else UPLOAD_HOST
+    
+    # Build user-friendly URLs
+    primary_url = f"http://{display_host}:{UPLOAD_PORT}/upload"
+    
+    # Add IP-based variant if available
+    alternatives = []
+    if display_host == "localhost":
+        try:
+            import socket
+            hostname = socket.gethostname()
+            ip_addr = socket.gethostbyname(hostname)
+            if ip_addr != "127.0.0.1":
+                alternatives.append(f"http://{ip_addr}:{UPLOAD_PORT}/upload")
+        except Exception:
+            pass
+    
+    response = {
+        "error": "File uploads via MCP tool are disabled",
+        "message": "Please use the direct HTTP upload endpoint instead.",
+        "reason": [
+            "Direct upload is much faster (no base64 encoding)",
+            "Supports larger files without memory overhead",
+            "Better for bulk uploads and automation",
+            "Provides more control over the upload process"
+        ],
+        
+        "direct_upload_endpoint": {
+            "primary_url": primary_url,
+            "method": "POST",
+            "content_type": "multipart/form-data",
+            
+            "configuration": {
+                "host": UPLOAD_HOST,
+                "port": UPLOAD_PORT,
+                "storage_directory": os.getenv("GHIDRA_MCP_FILE_ROOT", "/tmp/ghidra-mcp-uploads")
+            },
+            
+            "accessible_urls": [primary_url] + alternatives
+        },
+        
+        "quick_examples": {
+            "curl_basic": {
+                "description": "Simple upload",
+                "command": f"curl -X POST \\\\\n  -F \"file=@your_binary.so\" \\\\\n  {primary_url}"
+            },
+            "curl_with_filename": {
+                "description": "Upload with custom filename",
+                "command": f"curl -X POST \\\\\n  -F \"file=@firmware.bin\" \\\\\n  -F \"filename=my_firmware_v1.bin\" \\\\\n  {primary_url}"
+            },
+            "curl_capture_response": {
+                "description": "Capture response and integrate with Ghidra",
+                "steps": [
+                    f"$RESPONSE=$(curl -s -X POST \\\\ ",
+                    f"    -F \"file=@target.so\" \\\\ ",
+                    f"    {primary_url})",
+                    "",
+                    "$FILE_PATH=$(echo \"$RESPONSE\" | jq -r '.full_path')",
+                    "",
+                    "# Then use with import_file():",
+                    'import_file(file_path="$FILE_PATH", language="ELF:LE:32:i386")'
+                ]
+            },
+            "python_requests_simple": {
+                "description": "Python upload with requests library",
+                "code": f"""import requests
+
+with open("binary.so", "rb") as f:
+    response = requests.post(
+        "{primary_url}",
+        files={{"file": f}}
+    )
+
+result = response.json()
+print(f"Uploaded: {{result['full_path']}}")"""
+            },
+            "python_requests_with_metadata": {
+                "description": "Python upload with filename and content type",
+                "code": f"""import requests
+
+with open("firmware.bin", "rb") as f:
+    response = requests.post(
+        "{primary_url}",
+        files={{
+            "file": ("firmware.bin", f, "application/octet-stream")
+        }},
+        data={{
+            "filename": "my_custom_firmware.bin",
+            "content_type": "application/octet-stream"
+        }}
+    )
+
+result = response.json()
+if result.get("success"):
+    full_path = result["full_path"]
+    print(f"File ready for Ghidra: {{full_path}}")"""
+            }
+        },
+        
+        "other_endpoints": {
+            "list_files": f"GET {primary_url.replace('/upload', '/files')}",
+            "get_info": f"GET {{baseUrl}}/files/{{filename}}",
+            "delete": f"DELETE {{baseUrl}}/files/{{filename}}"
+        },
+        
+        "usage_workflow": [
+            "1. Upload file: POST " + primary_url + " with multipart/form-data",
+            "2. Capture response containing 'full_path'",
+            "3. Use import_file() MCP tool with the returned path:"
+        ],
+        
+        "troubleshooting": {
+            "server_not_running": "Start the direct upload server:",
+            "start_command": "cd /path/to/ghidra-mcp/python && python3 -m bridge_mcp_ghidra.direct_upload_server",
+            "check_port": f"Ensure port {UPLOAD_PORT} is not blocked by firewall",
+            "remote_access": "If accessing remotely, ensure the server binds to 0.0.0.0 or your external IP"
+        },
+        
+        "documentation": {
+            "api_guide": "docs/FILE_UPLOAD_GUIDE.md",
+            "agent_guide": "docs/FILE_UPLOAD_GUIDE.md",
+            "implementation_summary": "docs/FILE_UPLOAD_GUIDE.md"
+        }
+    }
+    
+    return json.dumps(response, indent=2)
+
