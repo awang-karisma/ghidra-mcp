@@ -94,7 +94,14 @@ FROM eclipse-temurin:21-jdk
 RUN apt-get update && apt-get install -y \
     curl \
     unzip \
+    python3 \
+    python3-pip \
+    git \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Python MCP bridge
+RUN pip3 install --break-system-packages --no-cache-dir \
+    "git+https://github.com/bethington/ghidra-mcp.git"
 
 # Copy Ghidra from builder
 COPY --from=builder /opt/ghidra /opt/ghidra
@@ -136,14 +143,16 @@ RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 # it; /data and /projects are chown'd before the VOLUME declaration so the
 # anonymous volumes inherit ghidra ownership. HOME drives Java's user.home,
 # where Ghidra writes its per-user settings.
-RUN groupadd --gid 1000 ghidra \
+RUN userdel -r $(getent passwd 1000 | cut -d: -f1) || true \
+    && groupdel $(getent group 1000 | cut -d: -f1) || true \
+    && groupadd --gid 1000 ghidra \
     && useradd --uid 1000 --gid 1000 --create-home --home-dir /home/ghidra ghidra \
     && chown -R ghidra:ghidra /app /data /projects /home/ghidra
 ENV HOME=/home/ghidra
 USER ghidra
 
 # Expose port
-EXPOSE 8089
+EXPOSE 8089 8090
 
 # Volume for persistent data and projects
 VOLUME ["/data", "/projects"]
