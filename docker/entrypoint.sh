@@ -104,7 +104,7 @@ if [ -n "${PROJECT_PATH}" ] && [ -d "${PROJECT_PATH}" ]; then
     ARGS="${ARGS} --project ${PROJECT_PATH}"
 fi
 
-echo -e "${GREEN}Starting server...${NC}"
+echo -e "${GREEN}Starting Ghidra server...${NC}"
 echo ""
 
 # Build user.name option if GHIDRA_USER is set
@@ -113,12 +113,75 @@ if [ -n "${GHIDRA_USER}" ]; then
     USER_OPT="-Duser.name=${GHIDRA_USER}"
 fi
 
-# Start the server
-exec java \
+# Start Ghidra in the background so the MCP bridge can run alongside it.
+java \
     ${JAVA_OPTS} \
     ${USER_OPT} \
     -Dghidra.home=${GHIDRA_HOME} \
     -Dapplication.name=GhidraMCP \
     -classpath "${CLASSPATH}" \
     com.xebyte.headless.GhidraMCPHeadlessServer \
-    ${ARGS}
+    ${ARGS} &
+
+GHIDRA_PID=$!
+
+# Wait until Ghidra is actually ready.
+echo -e "${YELLOW}Waiting for Ghidra on ${GHIDRA_MCP_URL:-http://127.0.0.1:${PORT}}...${NC}"
+
+GHIDRA_URL="${GHIDRA_MCP_URL:-http://127.0.0.1:${PORT}}"
+
+for i in $(seq 1 60); do
+    if curl -sf "${GHIDRA_URL}/check_connection" >/dev/null 2>&1; then
+        echo -e "${GREEN}Ghidra is ready.${NC}"
+        break
+    fi
+
+    if ! kill -0 "${GHIDRA_PID}" 2>/dev/null; then
+        echo -e "${RED}Ghidra server exited unexpectedly.${NC}"
+        exit 1
+    fi
+
+    sleep 1
+done
+
+# Verify Ghidra actually became ready.
+if ! curl -sf "${GHIDRA_URL}/check_connection" >/dev/null 2>&1; then
+    echo -e "${RED}Ghidra did not become ready within 60 seconds.${NC}"
+    kill "${GHIDRA_PID}" 2>/dev/null || true
+    exit 1
+fi
+
+# Start the Python MCP bridge.
+# Start the Python MCP bridge.
+MCP_BRIDGE_PORT=${GHIDRA_MCP_BRIDGE_PORT:-8090}
+
+echo -e "${GREEN}Starting MCP bridge on 0.0.0.0:${MCP_BRIDGE_PORT}...${NC}"
+
+python3 -m bridge_mcp_ghidra \
+    --transport streamable-http \
+    --mcp-host 0.0.0.0 \
+    --mcp-port "${MCP_BRIDGE_PORT}" &
+
+BRIDGE_PID=$!
+
+cleanup() {
+    echo ""
+    echo -e "${YELLOW}Shutting down GhidraMCP...${NC}"
+
+    kill "${BRIDGE_PID}" 2>/dev/null || true
+    kill "${GHIDRA_PID}" 2>/dev/null || true
+
+    wait "${BRIDGE_PID}" 2>/dev/null || true
+    wait "${GHIDRA_PID}" 2>/dev/null || true
+}
+
+trap cleanup SIGTERM SIGINT
+
+# Keep the container alive while both services are running.
+wait -n "${GHIDRA_PID}" "${BRIDGE_PID}"
+
+STATUS=$?
+
+cleanup
+
+exit "${STATUS}"

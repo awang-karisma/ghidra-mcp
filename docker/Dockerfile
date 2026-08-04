@@ -94,7 +94,14 @@ FROM eclipse-temurin:21-jdk
 RUN apt-get update && apt-get install -y \
     curl \
     unzip \
+    python3 \
+    python3-pip \
+    git \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Python MCP bridge
+RUN pip3 install --break-system-packages --no-cache-dir \
+    "git+https://github.com/bethington/ghidra-mcp.git"
 
 # Copy Ghidra from builder
 COPY --from=builder /opt/ghidra /opt/ghidra
@@ -145,7 +152,7 @@ ENV HOME=/home/ghidra
 USER ghidra
 
 # Expose port
-EXPOSE 8089
+EXPOSE 8089 8090
 
 # Volume for persistent data and projects
 VOLUME ["/data", "/projects"]
